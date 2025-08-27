@@ -1,0 +1,23 @@
+Metadata-Version: 2.4
+Name: harmonyrl
+Version: 0.1.0
+Summary: HarmonyRL: Multi-instrument symbolic music generation with LSTM/Transformer + RL fine-tuning
+Requires-Python: >=3.9
+Requires-Dist: torch>=2.2
+Requires-Dist: torchaudio>=2.2
+Requires-Dist: pretty_midi
+Requires-Dist: mido
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: tqdm
+Requires-Dist: pyyaml
+Requires-Dist: music21
+Requires-Dist: soundfile
+Requires-Dist: librosa
+Requires-Dist: transformers>=4.41
+Requires-Dist: datasets>=2.20
+Requires-Dist: diffusers>=0.30
+Requires-Dist: accelerate>=0.33
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

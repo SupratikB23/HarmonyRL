@@ -1,0 +1,41 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environment
+.venv/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs and outputs
+logs/
+wandb/
+runs/
+outputs/
+*.log
+
+# Checkpoints / saved models
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+
+# Configs generated at runtime
+*.yaml~
+*.json~
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+
+# Dataset
+data/

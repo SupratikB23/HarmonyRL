@@ -1,0 +1,39 @@
+seed: 42
+data:
+  maestro_root: "/path/to/maestro"
+  max_seq_len: 2048
+  transpose_aug: true
+  split:
+    train_ratio: 0.95
+model:
+  vocab_size: 512
+  embed_dim: 512
+  lstm_hidden: 768
+  lstm_layers: 3
+  dropout: 0.2
+train:
+  batch_size: 8
+  lr: 0.0003
+  epochs: 20
+  clip_grad_norm: 1.0
+rl:
+  episodes: 2000
+  rollout_len: 512
+  gamma: 0.995
+  entropy_coef: 0.005
+  baseline: ema
+  ema_beta: 0.95
+reward:
+  weights:
+    harmony: 0.5
+    rhythm: 0.2
+    style: 0.25
+    clap: 0.05
+  style_text_prompt: "modern jazz trio with swing feel"
+  hf_genre_classifier: "laion/clap-htsat-fused"   
+audio:
+  sample_rate: 32000
+  sf2: "/path/to/GeneralUser GS v1.471.sf2" 
+diffusers:
+  enable: false
+  model_id: "cvssp/audioldm2"
