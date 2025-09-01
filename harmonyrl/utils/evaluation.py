@@ -1,8 +1,7 @@
 from typing import List
 from harmonyrl.midi_utils import token_is_pitch, token_to_pitch
 
-# Very small theory-based reward: prefer consonant intervals between consecutive notes
-_CONS = {0,3,4,5,7,8,9}  # unison/3rds/4th/5th/6ths
+_CONS = {0,3,4,5,7,8,9}
 def _consonance(a: int, b: int) -> float:
     iv = abs(a - b) % 12
     return 1.0 if iv in _CONS else -0.5

@@ -7,10 +7,6 @@ import pretty_midi
 from harmonyrl.midi_utils import midi_to_tokens
 
 class MIDITokenDataset(Dataset):
-    """
-    Loads .mid/.midi files and converts to token sequences.
-    Returns (input_ids, target_ids, length).
-    """
     def __init__(self, root: str, max_seq_len: int = 2048, split: str = "train", train_ratio: float = 0.95):
         midi_paths: List[str] = sorted(glob.glob(os.path.join(root, "**/*.mid*"), recursive=True))
         if not midi_paths:

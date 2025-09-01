@@ -1,8 +1,3 @@
-"""
-Audio post-processing using Diffusers (AudioLDM2).
-- Can perform light enhancement or style-conditioning on the rendered audio.
-- Safe to import even when diffusers/weights aren’t available.
-"""
 from typing import Optional
 import numpy as np
 
@@ -15,10 +10,6 @@ def enhance_with_audioldm(
     guidance: float = 2.0,
     device: Optional[str] = None,
 ):
-    """
-    Returns enhanced audio as numpy array (same sample rate).
-    If diffusers or model weights are missing, returns the input audio unchanged.
-    """
     try:
         import torch
         from diffusers import AudioLDMPipeline

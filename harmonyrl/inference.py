@@ -1,9 +1,3 @@
-"""
-End-to-end inference:
-- Loads the best available checkpoint (RL-finetuned if present, else supervised).
-- Samples a token sequence, renders to MIDI and WAV.
-- Optional post-process with Diffusers (AudioLDM2).
-"""
 import os
 from typing import Optional
 

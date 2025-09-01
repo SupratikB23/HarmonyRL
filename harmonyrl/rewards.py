@@ -1,13 +1,3 @@
-"""
-Rewards that can be used during RL fine-tuning.
-
-Includes:
-- Symbolic harmony/rhythm rewards (fast, no GPU needed)
-- Optional HF audio-based rewards (genre/style and CLAP similarity)
-
-These are written to be robust: if HF pipelines/models aren't available,
-they fail closed and return 0.0 (so training can still proceed).
-"""
 from typing import Dict, List, Optional
 import numpy as np
 
