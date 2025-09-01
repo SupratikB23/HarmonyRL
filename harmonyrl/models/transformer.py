@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class RotaryPositionalEncoding(nn.Module):
     def __init__(self, dim, max_len=4096):
         super().__init__()
@@ -12,18 +11,15 @@ class RotaryPositionalEncoding(nn.Module):
         freqs = torch.einsum("i,j->ij", t, inv_freq)
         emb = torch.cat([torch.sin(freqs), torch.cos(freqs)], dim=-1)
         self.register_buffer("pos_emb", emb, persistent=False)
-
     def forward(self, x):
         T = x.size(1)
         return self.pos_emb[:T, :]
-
 
 def apply_rotary(x, rope):
     d = x.size(-1)
     x1, x2 = x[..., : d // 2], x[..., d // 2:]
     sin, cos = rope[..., : d // 2], rope[..., d // 2:]
     return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
-
 
 class PreNormTransformerLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_ff, dropout):
@@ -42,7 +38,6 @@ class PreNormTransformerLayer(nn.Module):
         x = x + self.attn(self.ln1(x), self.ln1(x), self.ln1(x), attn_mask=attn_mask)[0]
         x = x + self.ff(self.ln2(x))
         return x
-
 
 class SmallTransformer(nn.Module):
     def __init__(
