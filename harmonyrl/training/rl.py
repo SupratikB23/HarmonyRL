@@ -55,15 +55,12 @@ def train_rl(config_path: str = "configs/rl_config.yaml"):
             top_p=0.9,
         )
 
-        # === Compute reward ===
         R = simple_harmony_reward(tokens)
         reward_history.append(R)
 
-        # === Log-probs ===
-        logps = compute_logprobs(model, tokens, device)  # [T]
-        logp_traj = logps.mean()  # average trajectory log-prob
+        logps = compute_logprobs(model, tokens, device) 
+        logp_traj = logps.mean() 
 
-        # === Entropy bonus ===
         x = torch.tensor(tokens[:-1], dtype=torch.long, device=device).unsqueeze(0)
         logits, _ = model(x)
         probs = F.softmax(logits, dim=-1)
@@ -71,7 +68,7 @@ def train_rl(config_path: str = "configs/rl_config.yaml"):
 
         baseline_val = baseline.update(R)
         adv = R - baseline_val
-        adv /= (torch.tensor(reward_history[-100:]).std() + 1e-6)  # normalize
+        adv /= (torch.tensor(reward_history[-100:]).std() + 1e-6) 
 
         loss = -(adv * logp_traj) - entropy_coef * entropy
         opt.zero_grad()
