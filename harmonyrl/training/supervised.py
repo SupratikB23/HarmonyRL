@@ -49,8 +49,7 @@ def train_supervised(config_path: str = "configs/supervised_config.yaml"):
 
     opt = AdamW(model.parameters(), lr=float(cfg["train"]["lr"]), weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, mode="min", factor=0.5, patience=3, verbose=True
-    )
+        opt, mode="min", factor=0.5, patience=3)
 
     if cfg["train"].get("label_smoothing", 0.0) > 0:
         loss_fn = LabelSmoothingLoss(
