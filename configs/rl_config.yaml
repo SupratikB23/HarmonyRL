@@ -1,14 +1,14 @@
 seed: 123
 model:
   embed_dim: 512
-  hidden: 512      
-  layers: 3   
+  hidden: 512
+  layers: 3
   dropout: 0.3
 train:
   ckpt_dir: "checkpoints"
 rl:
-  episodes: 5000        
-  rollout_len: 256      
-  lr: 1e-4              
-  baseline_beta: 0.95   
-  entropy_coef: 0.01    
+  episodes: 5000
+  rollout_len: 256
+  lr: 1e-4
+  baseline_beta: 0.95
+  entropy_coef: 0.01
