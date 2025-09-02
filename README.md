@@ -142,7 +142,9 @@ rl:
 │   ├── infer.py
 │   ├── train_rl.py
 │   └── train_supervised.py
-└── setup.py
+├── setup.py
+├── NOTICE 
+└── LICENSE
 </pre>
 
 
