@@ -39,7 +39,7 @@ The goal is to generate high-quality, coherent, and musically pleasing MIDI outp
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/HarmonyRL.git
+git clone https://github.com/SupratikB23/HarmonyRL.git
 cd HarmonyRL
 
 # Create virtual environment
