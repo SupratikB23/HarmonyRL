@@ -50,7 +50,7 @@ venv\Scripts\activate      # (Windows)
 # Install dependencies
 pip install -r requirements.txt
 ```
-<hr/> <h2>🎼 Dataset</h2> <p> This project uses the <b>MAESTRO Dataset</b> (approx. 200 hours of virtuosic piano performances, ~1276 MIDI files). Download it from <a href="https://magenta.tensorflow.org/datasets/maestro">Google Magenta MAESTRO</a> and place inside <code>data/maestro/</code>. </p> <hr/> <h2>🚀 Training</h2> <h3>1. Supervised Pretraining</h3>
+<hr/> <h2>🎼 Dataset</h2> <p> This project uses the <b>MAESTRO Dataset</b> (approx. 200 hours of virtuosic piano performances, ~1276 MIDI files). Download it from <a href="https://magenta.tensorflow.org/datasets/maestro">Google Magenta MAESTRO</a>  </p> <hr/> <h2>🚀 Training</h2> <h3>1. Supervised Pretraining</h3>
 
 ```bash
 python scripts/train_supervised.py --config configs/supervised_config.yaml
