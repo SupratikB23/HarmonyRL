@@ -1,4 +1,4 @@
-<h1 align="center">🎶 HarmonyRL: Music Generation using Reinforcement Learning 🎶</h1>
+<h1 align="center">🎶 HarmonyRL: Music Generation using Supervised Reinforcement Learning 🎶</h1>
 
 <p align="center">
   <b>HarmonyRL</b> is a deep learning framework for generating symbolic music (MIDI) using
