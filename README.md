@@ -65,7 +65,7 @@ MIDI is converted into a compact integer vocabulary before training:
 | `16 – 104` | Pitch tokens (MIDI notes 21–108, piano range) |
 | `256 – 260` | Duration tokens (60, 120, 240, 480, 960 ticks @ 480 PPQ) |
 
-Total vocabulary size: **261 tokens**. The scheme is intentionally small to keep models lightweight and training fast during experimentation.
+Total vocabulary size: **261 tokens** (`VOCAB_SIZE = DUR_BASE + len(DURS)` = 256 + 5). Token IDs 5–15 and 105–255 are intentionally left unused as reserved space — the scheme is kept small to keep models lightweight and training fast during experimentation.
 
 ---
 
@@ -104,7 +104,7 @@ The RL reward signal is a combination of symbolic and (optionally) perceptual co
 Consecutive note pairs are scored by their interval consonance. Unisons, thirds, fourths, fifths, and sixths are considered consonant; all other intervals are penalized.
 
 ```
-R_harmony = (1 / N-1) · Σ consonance(pitch_i, pitch_{i+1})
+R_harmony = (1 / (N-1)) · Σ consonance(pitch_i, pitch_{i+1})
 
 where consonance(a, b) = +1.0 if |a-b| mod 12 ∈ {0,3,4,5,7,8,9}
                         = -0.5 otherwise
@@ -140,13 +140,13 @@ The RL trainer (`harmonyrl/training/rl.py`) uses **REINFORCE with an EMA baselin
 ```
 ∇J(θ) = E[ A · ∇ log π_θ(a | s) ] + α · H[π_θ]
 
-where A = (R - b) / σ_100       # advantage, normalized over last 100 episodes
+where A = (R - b) / σ_100       # advantage, normalized by rolling std of last 100 rewards
       b = EMA(R, β=0.95)        # running baseline
       H[π_θ]                    # entropy bonus to encourage exploration
 ```
 
 Each episode:
-1. Sample a full token sequence from the current policy (LSTM rollout)
+1. Sample a full token sequence from the current policy (model rollout)
 2. Compute reward `R` from the token sequence
 3. Backpropagate the policy gradient loss
 4. Update the EMA baseline
