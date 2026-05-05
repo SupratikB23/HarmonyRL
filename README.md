@@ -1,104 +1,235 @@
-<h1 align="center">🎶 HarmonyRL: Music Generation using Supervised Reinforcement Learning 🎶</h1>
+# 🎶 HarmonyRL
 
-<p align="center">
-  <b>HarmonyRL</b> is a deep learning framework for generating symbolic music (MIDI) using
-  <i>Supervised Learning</i>, <i>Reinforcement Learning (RL)</i>, and <i>Diffusion-based Postprocessing</i>.
-</p>
+**Symbolic music generation with Supervised Pretraining + Reinforcement Learning fine-tuning + Diffusion postprocessing.**
 
-<hr/>
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.2%2B-ee4c2c?logo=pytorch)](https://pytorch.org/)
+[![HuggingFace](https://img.shields.io/badge/HuggingFace-Transformers%20%7C%20Diffusers-yellow?logo=huggingface)](https://huggingface.co/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green)](LICENSE)
 
-<h2>📌 Project Overview</h2>
-<p>
-HarmonyRL combines <b>LSTM</b>, <b>Transformer</b> architectures, and <b>Reinforcement Learning</b> (policy gradient–style optimization)
-to train generative music models on the <a href="https://magenta.tensorflow.org/datasets/maestro">MAESTRO Dataset</a>. 
-The goal is to generate high-quality, coherent, and musically pleasing MIDI outputs.
-</p>
+> **Status:** Active experiment — architectures, reward functions, and training loops are all being iterated on.
 
-<ul>
-  <li><b>Supervised Learning:</b> Pretraining with cross-entropy loss on MAESTRO dataset.</li>
-  <li><b>Reinforcement Learning:</b> Fine-tuning with reward functions (harmony, rhythm, novelty, smoothness).</li>
-  <li><b>Diffusion Postprocessing:</b> Improving raw MIDI outputs by refining transitions and removing dissonance.</li>
-</ul>
+---
 
-<hr/>
+## What Is This?
 
-<h2>⚙️ Tech Stack</h2>
+HarmonyRL is an experimental framework that treats **music generation as a sequential decision-making problem**. The core idea: first teach a model *what music looks like* via supervised learning on real piano performances, then use reinforcement learning to nudge it toward outputs that sound *musically coherent* — not just statistically likely.
 
-<ul>
-  <li><b>Deep Learning:</b> PyTorch (torch>=2.2, torchaudio>=2.2)</li>
-  <li><b>Symbolic Music Processing:</b> pretty_midi, mido, music21</li>
-  <li><b>Audio Processing:</b> librosa, soundfile</li>
-  <li><b>Datasets & Tokenization:</b> HuggingFace datasets>=2.20, transformers>=4.41</li>
-  <li><b>Generative Refinement:</b> diffusers>=0.30, accelerate>=0.33</li>
-  <li><b>Utilities:</b> numpy, scipy, tqdm, pyyaml</li>
-</ul>
+The pipeline has three stages:
 
-<hr/>
+```
+MAESTRO MIDI corpus
+        │
+        ▼
+┌──────────────────┐
+│  Supervised      │  Cross-entropy pretraining on tokenized MIDI sequences
+│  Pretraining     │  (LSTM or Transformer backbone)
+└────────┬─────────┘
+         │  checkpoint
+         ▼
+┌──────────────────┐
+│  RL Fine-tuning  │  REINFORCE with EMA baseline + entropy bonus
+│  (Policy Grad.)  │  Reward: harmony consonance + rhythmic regularity
+└────────┬─────────┘
+         │  MIDI tokens
+         ▼
+┌──────────────────┐
+│  Diffusion       │  AudioLDM2 postprocessing on synthesized audio
+│  Postprocessing  │  Softens dissonance, improves timbral quality
+└──────────────────┘
+```
 
-<h2>📦 Installation</h2>
+---
+
+## Motivation
+
+Standard language-model-style training on MIDI learns token distributions but has no direct incentive to produce *harmonically pleasant* music. A model can achieve low cross-entropy while generating atonal noise. RL bridges that gap: define what "good music" means as a reward signal and optimize for it directly.
+
+The challenge is that musical quality is hard to quantify. This project experiments with:
+- **Symbolic rewards** computed directly on token sequences (fast, differentiable proxies)
+- **Perceptual rewards** via CLAP (Contrastive Language-Audio Pretraining) text–audio similarity
+
+---
+
+## Tokenization Scheme
+
+MIDI is converted into a compact integer vocabulary before training:
+
+| Token range | Meaning |
+|---|---|
+| `0` | `PAD` |
+| `1` | `BOS` (begin of sequence) |
+| `2` | `EOS` (end of sequence) |
+| `3` | `BAR` (measure boundary) |
+| `4` | `REST` |
+| `16 – 104` | Pitch tokens (MIDI notes 21–108, piano range) |
+| `256 – 260` | Duration tokens (60, 120, 240, 480, 960 ticks @ 480 PPQ) |
+
+Total vocabulary size: **261 tokens** (`VOCAB_SIZE = DUR_BASE + len(DURS)` = 256 + 5). Token IDs 5–15 and 105–255 are intentionally left unused as reserved space — the scheme is kept small to keep models lightweight and training fast during experimentation.
+
+---
+
+## Models
+
+Two backbone architectures are available and interchangeable:
+
+### LSTM (`harmonyrl/models/lstm.py`)
+
+A stacked LSTM with tied input/output embeddings and LayerNorm on the hidden state.
+
+```
+Embedding(vocab, d) → LSTM(d→h, L layers) → LayerNorm → Dropout → Linear(h→vocab)
+```
+
+Weight tying between the embedding and output projection reduces parameters and often improves generation quality.
+
+### Transformer (`harmonyrl/models/transformer.py`)
+
+A Pre-Norm decoder-only Transformer with **Rotary Positional Encoding (RoPE)** instead of learned or sinusoidal embeddings. RoPE encodes relative position information directly into attention scores, which helps the model generalize to sequence lengths not seen during training.
+
+```
+Embedding(vocab, d) → RoPE → N × [PreNorm → MHA → PreNorm → FFN] → LayerNorm → Linear(h→vocab)
+```
+
+Both models use **nucleus (top-p) sampling** at inference time.
+
+---
+
+## Reward Design
+
+The RL reward signal is a combination of symbolic and (optionally) perceptual components:
+
+### Harmony Reward
+
+Consecutive note pairs are scored by their interval consonance. Unisons, thirds, fourths, fifths, and sixths are considered consonant; all other intervals are penalized.
+
+```
+R_harmony = (1 / (N-1)) · Σ consonance(pitch_i, pitch_{i+1})
+
+where consonance(a, b) = +1.0 if |a-b| mod 12 ∈ {0,3,4,5,7,8,9}
+                        = -0.5 otherwise
+```
+
+### Rhythm Reward
+
+Duration token ratios between adjacent notes are checked against integer ratios. Rhythmic regularity (ratios close to 1:1, 1:2, etc.) scores higher.
+
+```
+R_rhythm = 1 - mean( clip( |round(d_{i+1}/d_i) - d_{i+1}/d_i|, 0, 1 ) )
+```
+
+### Perceptual Rewards (Optional)
+
+When audio synthesis is available, two additional reward signals can be enabled:
+
+- **`reward_style`** — Uses a HuggingFace audio classifier to check if the generated audio matches a style prompt (e.g., `"jazz"`, `"classical"`). Score is based on label–prompt token overlap weighted by classifier confidence.
+- **`reward_clap`** — Uses [LAION CLAP](https://huggingface.co/laion/clap-htsat-unfused) (zero-shot text–audio classification) to compute a similarity score between the audio and a free-text description. More expressive but slower.
+
+Rewards are combined with configurable weights:
+
+```python
+R_total = Σ weight_k · R_k
+```
+
+---
+
+## RL Training Loop
+
+The RL trainer (`harmonyrl/training/rl.py`) uses **REINFORCE with an EMA baseline** to reduce variance:
+
+```
+∇J(θ) = E[ A · ∇ log π_θ(a | s) ] + α · H[π_θ]
+
+where A = (R - b) / σ_100       # advantage, normalized by rolling std of last 100 rewards
+      b = EMA(R, β=0.95)        # running baseline
+      H[π_θ]                    # entropy bonus to encourage exploration
+```
+
+Each episode:
+1. Sample a full token sequence from the current policy (model rollout)
+2. Compute reward `R` from the token sequence
+3. Backpropagate the policy gradient loss
+4. Update the EMA baseline
+
+Mixed-precision training (`torch.cuda.amp`) is used when a GPU is available.
+
+---
+
+## Diffusion Postprocessing
+
+After generating MIDI tokens and synthesizing audio, an optional postprocessing step runs the audio through **AudioLDM2** (`cvssp/audioldm2`). This is a text-conditioned latent diffusion model for audio. The prompt (e.g., `"studio quality jazz trio, warm, clean mix"`) guides the denoising toward a target timbre and style.
+
+This stage is best thought of as an audio-domain polish pass, not a structural one — it won't fix fundamentally incoherent note sequences.
+
+---
+
+## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/SupratikB23/HarmonyRL.git
 cd HarmonyRL
 
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate   # (Linux/Mac)
-venv\Scripts\activate      # (Windows)
+source venv/bin/activate      # Linux/macOS
+# venv\Scripts\activate       # Windows
 
-# Install dependencies
 pip install -r requirements.txt
 ```
-<hr/> <h2>🎼 Dataset</h2> <p> This project uses the <b>MAESTRO Dataset</b> (approx. 200 hours of virtuosic piano performances, ~1276 MIDI files). Download it from <a href="https://magenta.tensorflow.org/datasets/maestro">Google Magenta MAESTRO</a>  </p> <hr/> <h2>🚀 Training</h2> <h3>1. Supervised Pretraining</h3>
+
+---
+
+## Dataset
+
+This project uses the **[MAESTRO Dataset](https://magenta.tensorflow.org/datasets/maestro)** (MIDI and Audio Edited for Synchronous Tracks and Organization) — approximately 200 hours of virtuosic piano performances across ~1,276 MIDI files, annotated with note-level timing.
+
+Download from [Google Magenta](https://magenta.tensorflow.org/datasets/maestro) and place under `data/maestro/`.
+
+---
+
+## Training
+
+### Step 1 — Supervised Pretraining
 
 ```bash
 python scripts/train_supervised.py --config configs/supervised_config.yaml
 ```
-<h3>2. Reinforcement Learning Fine-tuning</h3>
+
+Key config options (`configs/supervised_config.yaml`):
+
+```yaml
+seed: 42
+data:
+  root: "data/maestro"
+  max_seq_len: 1024
+  train_ratio: 0.95
+model:
+  embed_dim: 512
+  hidden: 512
+  layers: 3
+  dropout: 0.3
+train:
+  batch_size: 16
+  lr: 5e-4
+  epochs: 50
+  clip_grad_norm: 1.0
+  ckpt_dir: "checkpoints"
+```
+
+### Step 2 — RL Fine-tuning
 
 ```bash
 python scripts/train_rl.py --config configs/rl_config.yaml
 ```
 
-<h3>3. Inference (Generate MIDI)</h3>
+Key config options (`configs/rl_config.yaml`):
 
-```bash
-python scripts/infer.py --ckpt checkpoints/best_model.pt --output_dir outputs/
-```
-
-<hr/> <h2>🧠 Algorithms & Formulations</h2> <h3>1. Supervised Learning</h3> <p> Cross-Entropy Loss is applied on sequence modeling of MIDI tokens: </p> <p align="center"><code>L(θ) = - Σ [ y<sub>t</sub> log P(y<sub>t</sub>|x<sub>&lt;t</sub>; θ) ]</code></p> <h3>2. Reinforcement Learning</h3> <p> We fine-tune the pretrained model using <b>Policy Gradient (REINFORCE)</b> with a baseline to reduce variance: </p> <p align="center"><code>∇J(θ) = E[ (R - b) ∇ log π<sub>θ</sub>(a|s) ]</code></p> <ul> <li>Reward <b>R</b> is computed from multiple components: <ul> <li>Harmony Consistency</li> <li>Rhythmic Structure</li> <li>Novelty & Diversity</li> <li>Smooth Transitions</li> </ul> </li> </ul> <h3>3. Diffusion Postprocessing</h3> <p> Diffusion models (via <code>diffusers</code>) refine generated MIDI embeddings, denoising dissonance and smoothing temporal structure. </p> <hr/> <h2>📊 Configuration</h2> <h3>Supervised Config (configs/supervised_config.yaml)</h3>
-
-```bash
-seed: 42
-data:
-  root: "data/maestro"
-  max_seq_len: 2048
-  train_ratio: 0.95
-model:
-  embed_dim: 512
-  hidden: 768
-  layers: 3
-  dropout: 0.2
-train:
-  batch_size: 8
-  lr: 3e-4
-  epochs: 20
-  clip_grad_norm: 1.0
-  ckpt_dir: "checkpoints"
-```
-
-<h3>Reinforcement Learning Config (configs/rl_config.yaml)</h3>
-
-```bash
+```yaml
 seed: 123
 model:
   embed_dim: 512
   hidden: 768
   layers: 3
   dropout: 0.2
-train:
-  ckpt_dir: "checkpoints"
 rl:
   episodes: 2000
   rollout_len: 512
@@ -106,46 +237,78 @@ rl:
   baseline_beta: 0.95
   entropy_coef: 0.005
 ```
-<hr/>
 
-<h2>📂 Repository Structure</h2>
+### Step 3 — Inference
 
-<pre>
-├── .gitignore
-├── README.md
-├── config.yaml
-├── configs
-│   ├── rl_config.yaml
-│   └── supervised_config.yaml
-├── harmonyrl.egg-info
-├── harmonyrl
-│   ├── __init__.py
-│   ├── datasets.py
-│   ├── inference.py
-│   ├── midi_utils.py
-│   ├── models
-│   │   ├── __init__.py
-│   │   ├── lstm.py
-│   │   └── transformer.py
-│   ├── postprocess_diffusers.py
-│   ├── rewards.py
-│   ├── training
-│   │   ├── __init__.py
-│   │   ├── rl.py
-│   │   └── supervised.py
-│   └── utils
-│       ├── __init__.py
-│       ├── evaluation.py
-│       └── logging.py
-├── requirements.txt
-├── scripts
-│   ├── infer.py
+```bash
+python scripts/infer.py --ckpt checkpoints/best_model.pt --output_dir outputs/
+```
+
+---
+
+## Repository Structure
+
+```
+HarmonyRL/
+├── configs/
+│   ├── supervised_config.yaml
+│   └── rl_config.yaml
+├── harmonyrl/
+│   ├── datasets.py              # MAESTRO MIDI loading & tokenization
+│   ├── midi_utils.py            # Tokenization scheme, MIDI ↔ token conversion
+│   ├── rewards.py               # Harmony, rhythm, CLAP, style reward functions
+│   ├── inference.py             # Sampling + MIDI export
+│   ├── postprocess_diffusers.py # AudioLDM2 diffusion postprocessing
+│   ├── models/
+│   │   ├── lstm.py              # LSTM backbone with weight tying
+│   │   └── transformer.py      # Pre-Norm Transformer + RoPE
+│   ├── training/
+│   │   ├── supervised.py        # Cross-entropy pretraining loop
+│   │   └── rl.py                # REINFORCE + EMA baseline RL loop
+│   └── utils/
+│       ├── evaluation.py        # Standalone harmony reward for evaluation
+│       └── logging.py           # Logger setup
+├── scripts/
+│   ├── train_supervised.py
 │   ├── train_rl.py
-│   └── train_supervised.py
+│   └── infer.py
+├── requirements.txt
 ├── setup.py
-├── NOTICE 
-└── LICENSE
-</pre>
+└── config.yaml
+```
 
+---
 
-<hr/> <h2>📈 Future Improvements</h2> <ul> <li>Experiment with larger Transformer backbones (e.g., Performer, Music Transformer).</li> <li>Introduce <b>Curriculum RL</b> with staged rewards for melody, harmony, and structure.</li> <li>Extend to multi-instrument compositions beyond piano (MAESTRO is piano-only).</li> <li>Integrate <b>GAN-based critics</b> for adversarial refinement of generated music.</li> <li>Better postprocessing via <b>latent diffusion</b> in symbolic space.</li> </ul> <hr/> <h2>🙌 Acknowledgements</h2> <p> - <a href="https://magenta.tensorflow.org/">Magenta Project</a> for MAESTRO dataset.<br/> - PyTorch, HuggingFace, Diffusers team for tools.<br/> - Inspiration from reinforcement learning in sequence generation (REINFORCE, PPO). </p>
+## Open Experiments & Ideas
+
+Things actively being explored or worth trying:
+
+- [ ] **Curriculum RL** — start with simple melody rewards, progressively add harmony and structure
+- [ ] **PPO instead of REINFORCE** — lower variance updates via clipped surrogate objective
+- [ ] **Transformer backbone for RL** — the current RL loop uses LSTM; swap in the Transformer
+- [ ] **Multi-instrument extension** — MAESTRO is piano-only; try Lakh MIDI Dataset for ensemble data
+- [ ] **Latent diffusion in symbolic space** — postprocess token embeddings rather than raw audio
+- [ ] **GAN-based critic** — adversarial reward from a discriminator trained on real MIDI
+- [ ] **Larger backbones** — Performer, Music Transformer, or a fine-tuned MusicGen encoder
+
+---
+
+## Tech Stack
+
+| Area | Library |
+|---|---|
+| Deep Learning | PyTorch ≥ 2.2, torchaudio ≥ 2.2 |
+| Symbolic Music | pretty_midi, mido, music21 |
+| Audio | librosa, soundfile |
+| Datasets / NLP | HuggingFace datasets ≥ 2.20, transformers ≥ 4.41 |
+| Diffusion | diffusers ≥ 0.30, accelerate ≥ 0.33 |
+| Utilities | numpy, scipy, tqdm, pyyaml |
+
+---
+
+## Acknowledgements
+
+- [Magenta Project](https://magenta.tensorflow.org/) for the MAESTRO dataset
+- [LAION CLAP](https://github.com/LAION-AI/CLAP) for text–audio similarity
+- [HuggingFace](https://huggingface.co/) for Transformers, Diffusers, and AudioLDM2
+- The REINFORCE and PPO literature for RL in sequence generation
