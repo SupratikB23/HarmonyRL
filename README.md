@@ -1,4 +1,4 @@
-# 🎶 HarmonyRL
+# HarmonyRL 🎶 
 
 **Symbolic music generation with Supervised Pretraining + Reinforcement Learning fine-tuning + Diffusion postprocessing.**
 
