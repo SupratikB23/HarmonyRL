@@ -22,8 +22,8 @@ MAESTRO MIDI corpus
         │
         ▼
 ┌──────────────────┐
-│  Supervised      │  Cross-entropy pretraining on tokenized MIDI sequences
-│  Pretraining     │  (LSTM or Transformer backbone)
+│  Supervised         │  Cross-entropy pretraining on tokenized MIDI sequences
+│  Pretraining        │  (LSTM or Transformer backbone)
 └────────┬─────────┘
          │  checkpoint
          ▼
