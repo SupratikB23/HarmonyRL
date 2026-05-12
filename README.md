@@ -28,14 +28,14 @@ MAESTRO MIDI corpus
          │  checkpoint
          ▼
 ┌──────────────────┐
-│  RL Fine-tuning  │  REINFORCE with EMA baseline + entropy bonus
-│  (Policy Grad.)  │  Reward: harmony consonance + rhythmic regularity
+│  RL Fine-tuning     │  REINFORCE with EMA baseline + entropy bonus
+│  (Policy Grad.)     │  Reward: harmony consonance + rhythmic regularity
 └────────┬─────────┘
          │  MIDI tokens
          ▼
 ┌──────────────────┐
-│  Diffusion       │  AudioLDM2 postprocessing on synthesized audio
-│  Postprocessing  │  Softens dissonance, improves timbral quality
+│  Diffusion          │  AudioLDM2 postprocessing on synthesized audio
+│  Postprocessing     │  Softens dissonance, improves timbral quality
 └──────────────────┘
 ```
 
