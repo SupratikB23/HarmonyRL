@@ -160,9 +160,10 @@ optional AudioLDM2 pass: `pip install -e ".[audio]"`.
 piano performance across ~1276 MIDI files. Download it and place the files under
 `data/maestro/`.
 
-The corpus is tokenized once and cached under `.cache/`; training then reads fixed-length
-chunks with a 50% stride, so one long performance yields many samples rather than a single
-truncated sequence. Train/validation splits are made **by recording group**, so movements
+The corpus is tokenized once and cached under `.cache/` (~9 min for all 1276 files, 28.5M
+tokens); training then reads fixed-length chunks with a 50% stride, so one long performance
+yields many samples rather than a single truncated sequence — 53,594 training chunks at
+`max_seq_len` 1024, against 1276 truncated samples under v0.1. Train/validation splits are made **by recording group**, so movements
 of the same performance cannot straddle the split.
 
 ---

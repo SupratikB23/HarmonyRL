@@ -171,10 +171,11 @@ def _(mo):
         """
         ## 4. Supervised pretraining
 
-        ~25M params over ~41M tokens. **4–6 hours.** Early stopping usually trips first.
+        ~25M params over 28.5M tokens: 53,594 chunks, 1,674 steps per epoch at batch 32.
+        30 epochs is ~50k steps. Early stopping usually trips first.
 
-        The first run tokenizes all 1276 files into `.cache/` (a few minutes); later runs
-        reuse it.
+        The first run tokenizes all 1276 files into `.cache/` — that pass alone takes
+        about 9 minutes and prints nothing while it works. Later runs reuse the cache.
 
         Watch **`val ppl`** — it should fall steadily and land well under 10. A random
         model sits near 172 (the vocabulary size).
@@ -187,7 +188,7 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    train_button = mo.ui.run_button(label="Start pretraining (4-6 h)")
+    train_button = mo.ui.run_button(label="Start pretraining")
     train_button
     return (train_button,)
 

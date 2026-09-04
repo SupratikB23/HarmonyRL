@@ -56,9 +56,19 @@ or write them out as a Kaggle Dataset so a later session can mount them as an in
 ## The GPU presets
 
 `configs/supervised_gpu.yaml` is a ~25M-param Transformer (`d_model` 512, 8 layers) over
-sequences of 1024 tokens at batch 32 — roughly 41M tokens of MAESTRO per epoch.
+sequences of 1024 tokens at batch 32.
 
-Expect 4–6 h for 30 epochs on molab, longer on a T4. Early stopping usually trips first.
+Measured on the full 1276-file corpus:
+
+| | |
+|---|---|
+| Tokens cached | 28.5M |
+| Train / val chunks | 53,594 / 2,441 |
+| Steps per epoch @ batch 32 | 1,674 |
+| One-time tokenizing pass | ~9 min |
+
+30 epochs is ~50k steps. Wall-clock depends on the card — expect a couple of hours on
+molab's Blackwell, appreciably longer on a T4. Early stopping usually trips first.
 
 **On a 16 GB card**, if you hit OOM: drop `batch_size` to 8 and `max_seq_len` to 512.
 **On molab**, you can raise `batch_size` to 64+ and leave everything else alone.
