@@ -1,0 +1,26 @@
+# GPU preset (~25M params). Tuned for molab's RTX Pro 6000 / Kaggle T4.
+# Drop batch_size to 8 and max_seq_len to 512 if you hit OOM on a 16GB card.
+seed: 42
+data:
+  root: "data/maestro"
+  max_seq_len: 1024
+  train_ratio: 0.95
+  num_workers: 4
+model:
+  arch: transformer
+  d_model: 512
+  nhead: 8
+  num_layers: 8
+  dim_feedforward: 2048
+  dropout: 0.1
+  max_len: 2048
+train:
+  batch_size: 32
+  lr: 3e-4
+  weight_decay: 0.01
+  warmup_steps: 1000
+  epochs: 30
+  label_smoothing: 0.05
+  clip_grad_norm: 1.0
+  patience: 5
+  ckpt_dir: "checkpoints"
