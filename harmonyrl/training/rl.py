@@ -1,91 +1,157 @@
-import os, yaml, tqdm, torch
-import torch.nn.functional as F
-from torch.optim import Adam, AdamW
-from harmonyrl.midi_utils import vocab_size
-from harmonyrl.models.lstm import LSTMModel
-from harmonyrl.utils.logging import get_logger
-from harmonyrl.utils.evaluation import simple_harmony_reward
+import copy
+import os
 
-class EMA:
-    def __init__(self, beta=0.95):
-        self.beta, self.v = beta, None
-    def update(self, x):
-        self.v = x if self.v is None else self.beta * self.v + (1 - self.beta) * x
-        return self.v
+import numpy as np
+import torch
+import torch.nn as nn
+import tqdm
+import yaml
+from torch.optim import AdamW
 
-def compute_logprobs(model, tokens, device):
-    x = torch.tensor(tokens[:-1], dtype=torch.long, device=device).unsqueeze(0)
-    y = torch.tensor(tokens[1:], dtype=torch.long, device=device).unsqueeze(0)
-    logits, _ = model(x)
-    logp = F.log_softmax(logits, dim=-1)
-    chosen = logp.gather(-1, y.unsqueeze(-1)).squeeze(0) 
-    return chosen
+from harmonyrl.midi_utils import EOS
+from harmonyrl.rewards import reward_parts, combine_rewards
+from harmonyrl.utils import device_of, get_logger, load_model, save_checkpoint
+
+
+class ActorCritic(nn.Module):
+    def __init__(self, backbone):
+        super().__init__()
+        self.backbone = backbone
+        self.value = nn.Linear(backbone.head.in_features, 1)
+        nn.init.zeros_(self.value.bias)
+
+    def forward(self, x):
+        h = self.backbone.features(x)[0]
+        return self.backbone.head(h), self.value(h).squeeze(-1)
+
+
+def gather_logprobs(logits, targets):
+    return torch.log_softmax(logits, -1).gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+
+
+def masked_entropy(logits, mask):
+    logp = torch.log_softmax(logits, -1)
+    ent = -(logp.exp() * logp).sum(-1)
+    return (ent * mask).sum() / mask.sum().clamp_min(1)
+
+
+def sequence_rewards(seq, weights):
+    rewards, parts = [], []
+    for row in seq.tolist():
+        tokens = row[: row.index(EOS) + 1] if EOS in row else row
+        p = reward_parts(tokens)
+        parts.append(p)
+        rewards.append(combine_rewards(p, weights))
+    return torch.tensor(rewards, dtype=torch.float32), parts
+
+
+def live_mask(targets):
+    """1 up to and including the first EOS, 0 after it.
+
+    `targets != PAD` is NOT equivalent: PAD is a sampleable id, so a stray PAD
+    would punch a hole in the middle of an episode and make `mask.sum(1)` a
+    wrong episode length.
+    """
+    ended = (targets == EOS).cumsum(1) - (targets == EOS).long()
+    return (ended == 0).float()
+
+
+def compute_gae(rewards, values, mask, gamma, lam):
+    T = rewards.size(1)
+    adv = torch.zeros_like(rewards)
+    last = torch.zeros_like(rewards[:, 0])
+    for t in reversed(range(T)):
+        next_v = values[:, t + 1] if t + 1 < T else torch.zeros_like(values[:, 0])
+        next_nonterm = mask[:, t + 1] if t + 1 < T else torch.zeros_like(mask[:, 0])
+        delta = rewards[:, t] + gamma * next_v * next_nonterm - values[:, t]
+        last = delta + gamma * lam * next_nonterm * last
+        adv[:, t] = last
+    return adv * mask
+
 
 def train_rl(config_path: str = "configs/rl_config.yaml"):
     log = get_logger("rl")
     cfg = yaml.safe_load(open(config_path, "r"))
+    rc = cfg["rl"]
     torch.manual_seed(cfg["seed"])
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = LSTMModel(
-        vocab_size(),
-        cfg["model"]["embed_dim"],
-        cfg["model"]["hidden"],
-        cfg["model"]["layers"],
-        cfg["model"]["dropout"],
-    ).to(device)
+    device = device_of(rc.get("device"))
 
-    sup_ck = os.path.join(cfg["train"]["ckpt_dir"], "lstm_supervised.pt")
-    if os.path.exists(sup_ck):
-        model.load_state_dict(torch.load(sup_ck, map_location=device))
-        log.info("Loaded supervised checkpoint.")
+    ckpt_dir = cfg["train"]["ckpt_dir"]
+    sup_ckpt = os.path.join(ckpt_dir, cfg["train"]["init_from"])
+    if not os.path.exists(sup_ckpt):
+        raise FileNotFoundError(f"Need a supervised checkpoint at {sup_ckpt}; run train_supervised first.")
+    backbone, meta = load_model(sup_ckpt, device)
+    log.info(f"loaded {sup_ckpt} (val_loss={meta.get('val_loss')})")
 
-    opt = AdamW(model.parameters(), lr=float(cfg["rl"]["lr"]), weight_decay=1e-4)
-    baseline = EMA(cfg["rl"]["baseline_beta"])
-    entropy_coef = cfg["rl"]["entropy_coef"]
+    model = ActorCritic(backbone).to(device)
+    model.eval()  # dropout off, so the PPO ratio starts at exactly 1
+    ref = copy.deepcopy(backbone).to(device).eval()
+    ref.requires_grad_(False)
 
-    model.train()
-    scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
-    reward_history = []
+    opt = AdamW(model.parameters(), lr=float(rc["lr"]), weight_decay=0.0)
+    weights = cfg["reward"]["weights"]
+    gamma, lam = rc.get("gamma", 1.0), rc.get("gae_lambda", 0.95)
+    clip, kl_coef = rc.get("clip_range", 0.2), rc.get("kl_coef", 0.05)
+    reward_log = []
 
-    for ep in tqdm.tqdm(range(cfg["rl"]["episodes"])):
-        tokens = model.sample(
-            max_new_tokens=cfg["rl"]["rollout_len"],
-            device=device,
-            temperature=1.0,  
-            top_p=0.9,
-        )
+    for it in tqdm.tqdm(range(rc["iterations"])):
+        seq = backbone.sample(batch_size=rc["batch_size"], max_new_tokens=rc["rollout_len"],
+                              temperature=rc.get("temperature", 1.0),
+                              top_p=rc.get("top_p", 0.95), device=device)
+        inputs, targets = seq[:, :-1], seq[:, 1:]
+        mask = live_mask(targets)
+        if mask.sum() == 0:
+            continue
 
-        R = simple_harmony_reward(tokens)
-        reward_history.append(R)
+        with torch.no_grad():
+            logits, values = model(inputs)
+            logp_old = gather_logprobs(logits, targets)
+            logp_ref = gather_logprobs(ref(inputs)[0], targets)
+            values = values * mask
 
-        logps = compute_logprobs(model, tokens, device) 
-        logp_traj = logps.mean() 
+        R, parts = sequence_rewards(seq, weights)
+        R = R.to(device)
+        reward_log.append(R.mean().item())
 
-        x = torch.tensor(tokens[:-1], dtype=torch.long, device=device).unsqueeze(0)
-        logits, _ = model(x)
-        probs = F.softmax(logits, dim=-1)
-        entropy = -(probs * probs.clamp_min(1e-9).log()).sum(dim=-1).mean()
+        # per-token KL shaping, sequence reward paid at the final real token
+        token_rewards = -kl_coef * (logp_old - logp_ref) * mask
+        last_idx = mask.sum(1).long() - 1
+        token_rewards[torch.arange(seq.size(0), device=device), last_idx] += R
 
-        baseline_val = baseline.update(R)
-        adv = R - baseline_val
-        adv /= (torch.tensor(reward_history[-100:]).std() + 1e-6) 
+        adv = compute_gae(token_rewards, values, mask, gamma, lam)
+        returns = adv + values
+        flat = adv[mask.bool()]
+        # unbiased std is NaN for a single live token; fall back to no scaling
+        std = flat.std() if flat.numel() > 1 else torch.zeros((), device=device)
+        adv = (adv - flat.mean()) / (std + 1e-8) * mask
 
-        loss = -(adv * logp_traj) - entropy_coef * entropy
-        opt.zero_grad()
-        with torch.cuda.amp.autocast(enabled=(device == "cuda")):
+        for _ in range(rc.get("ppo_epochs", 4)):
+            logits, values_new = model(inputs)
+            logp = gather_logprobs(logits, targets)
+            ratio = (logp - logp_old).exp()
+            pg = -torch.min(ratio * adv, ratio.clamp(1 - clip, 1 + clip) * adv)
+            pg_loss = (pg * mask).sum() / mask.sum()
+            v_loss = (((values_new - returns) ** 2) * mask).sum() / mask.sum()
+            entropy = masked_entropy(logits, mask)
+            loss = pg_loss + rc.get("value_coef", 0.5) * v_loss - rc["entropy_coef"] * entropy
+
+            opt.zero_grad(set_to_none=True)
             loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(opt)
-        scaler.update()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), rc.get("clip_grad_norm", 1.0))
+            opt.step()
 
-        if (ep + 1) % cfg["train"]["log_interval"] == 0:
-            log.info(
-                f"ep {ep+1} | R={R:.3f} | baseline={baseline_val:.3f} "
-                f"| adv={adv:.3f} | ent={entropy.item():.3f} | loss={loss.item():.3f}"
-            )
+        if (it + 1) % rc.get("log_interval", 10) == 0:
+            kl = ((logp_old - logp_ref) * mask).sum() / mask.sum()
+            avg = {k: float(np.mean([p[k] for p in parts])) for k in parts[0]}
+            log.info(f"it {it + 1} | R={R.mean():.3f} (avg100={np.mean(reward_log[-100:]):.3f}) "
+                     f"| kl={kl:.4f} | ent={entropy:.3f} | v={v_loss:.3f} | "
+                     + " ".join(f"{k}={v:.2f}" for k, v in avg.items()))
 
-        if (ep + 1) % cfg["train"]["save_interval"] == 0:
-            os.makedirs(cfg["train"]["ckpt_dir"], exist_ok=True)
-            ckpt_path = os.path.join(cfg["train"]["ckpt_dir"], f"lstm_rl_ep{ep+1}.pt")
-            torch.save(model.state_dict(), ckpt_path)
-            log.info(f"Saved checkpoint: {ckpt_path}")
+        if (it + 1) % rc.get("save_interval", 100) == 0:
+            path = os.path.join(ckpt_dir, f"{meta['model_config'].get('arch', 'lstm')}_rl.pt")
+            save_checkpoint(path, backbone, meta["model_config"], {"iteration": it + 1, "value_head": model.value.state_dict()})
+            log.info(f"saved {path}")
+
+    path = os.path.join(ckpt_dir, f"{meta['model_config'].get('arch', 'lstm')}_rl.pt")
+    save_checkpoint(path, backbone, meta["model_config"], {"iteration": rc["iterations"], "value_head": model.value.state_dict()})
+    return path

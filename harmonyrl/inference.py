@@ -3,50 +3,57 @@ from typing import Optional
 
 import numpy as np
 import soundfile as sf
-import torch
-from harmonyrl.midi_utils import vocab_size, tokens_to_midi, synth_audio
-from harmonyrl.models.lstm import LSTMModel
-from harmonyrl.postprocess_diffusers import enhance_with_audioldm
 
-def generate(
-    ckpt_dir: str = "checkpoints",
-    out_dir: str = "outputs",
-    max_new_tokens: int = 1024,
-    temperature: float = 0.9,
-    top_p: float = 0.95,
-    sr: int = 32000,
-    use_diffusers: bool = False,
-    diffusers_prompt: str = "studio quality jazz trio, warm, clean mix",
-) -> str:
+from harmonyrl.midi_utils import EOS, synth_audio, tokens_to_midi
+from harmonyrl.utils import device_of, evaluate_tokens, get_logger, load_model
+
+
+def find_checkpoint(ckpt_dir: str) -> str:
+    for name in ("transformer_rl.pt", "lstm_rl.pt",
+                 "transformer_supervised.pt", "lstm_supervised.pt"):
+        path = os.path.join(ckpt_dir, name)
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError(f"No checkpoint in {ckpt_dir}; train first.")
+
+
+def generate(ckpt: Optional[str] = None, ckpt_dir: str = "checkpoints", out_dir: str = "outputs",
+             n_samples: int = 1, max_new_tokens: int = 1024, temperature: float = 0.95,
+             top_p: float = 0.95, tempo: float = 120.0, sr: int = 32000,
+             render_audio: bool = True, use_diffusers: bool = False,
+             diffusers_prompt: str = "studio quality solo piano, warm, clean mix"):
+    log = get_logger("inference")
     os.makedirs(out_dir, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = device_of()
 
-    # Load model
-    model = LSTMModel(vocab_size(), embed_dim=512, hidden=768, layers=3, dropout=0.2).to(device)
-    ckpt_rl = os.path.join(ckpt_dir, "lstm_rl.pt")
-    ckpt_sup = os.path.join(ckpt_dir, "lstm_supervised.pt")
-    ckpt = ckpt_rl if os.path.exists(ckpt_rl) else ckpt_sup
-    if not os.path.exists(ckpt):
-        raise FileNotFoundError("No checkpoint found. Train first (supervised or RL).")
-    model.load_state_dict(torch.load(ckpt, map_location=device))
+    model, meta = load_model(ckpt or find_checkpoint(ckpt_dir), device)
+    seq = model.sample(batch_size=n_samples, max_new_tokens=max_new_tokens,
+                       temperature=temperature, top_p=top_p, device=device)
 
-    # Generate tokens → MIDI → audio
-    tokens = model.sample(max_new_tokens=max_new_tokens, temperature=temperature, top_p=top_p, device=device)
-    pm = tokens_to_midi(tokens)
-    midi_path = os.path.join(out_dir, "harmonyrl.mid")
-    pm.write(midi_path)
+    paths = []
+    for i, row in enumerate(seq.tolist()):
+        tokens = row[: row.index(EOS) + 1] if EOS in row else row
+        metrics = evaluate_tokens(tokens)
+        log.info(f"sample {i}: " + " ".join(f"{k}={v:.2f}" for k, v in metrics.items()))
 
-    audio = synth_audio(pm, sr=sr)
-    audio = np.asarray(audio, dtype=np.float32)
+        pm = tokens_to_midi(tokens, tempo=tempo)
+        midi_path = os.path.join(out_dir, f"harmonyrl_{i}.mid")
+        pm.write(midi_path)
+        paths.append(midi_path)
 
-    # Optional diffusers polish
-    if use_diffusers:
-        audio, _ = enhance_with_audioldm(audio, sr=sr, prompt=diffusers_prompt)
+        if render_audio and pm.instruments[0].notes:
+            audio = np.asarray(synth_audio(pm, sr=sr), dtype=np.float32)
+            out_sr = sr  # keep `sr` intact: the enhancer resamples, and the next
+            if use_diffusers:  # sample must still be synthesised at the requested rate
+                from harmonyrl.postprocess_diffusers import enhance_with_audioldm
+                audio, out_sr = enhance_with_audioldm(audio, sr=sr, prompt=diffusers_prompt)
+            peak = np.abs(audio).max()
+            if peak > 0:
+                audio = audio / peak * 0.9
+            sf.write(os.path.join(out_dir, f"harmonyrl_{i}.wav"), audio, out_sr)
 
-    wav_path = os.path.join(out_dir, "harmonyrl.wav")
-    sf.write(wav_path, audio, sr)
-    return wav_path
+    return paths
+
 
 if __name__ == "__main__":
-    path = generate()
-    print("Saved:", path)
+    print("Saved:", generate())

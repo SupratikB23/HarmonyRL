@@ -1,96 +1,96 @@
-from typing import Dict, List, Optional
+from collections import Counter
+from typing import Dict, List, Sequence
+
 import numpy as np
 
-from harmonyrl.midi_utils import (
-    token_is_pitch, token_to_pitch, token_to_dur
-)
+from harmonyrl.midi_utils import (BAR, is_duration, is_pitch, token_to_duration,
+                                  token_to_pitch)
 
-# ---------------------------
-# Symbolic (token-based) rewards
-# ---------------------------
+# Unison is neutral, not consonant: rewarding it makes "repeat one note" the optimum.
+_CONSONANCE = {0: 0.0, 1: -0.5, 2: -0.2, 3: 1.0, 4: 1.0, 5: 0.8,
+               6: -0.5, 7: 1.0, 8: 1.0, 9: 1.0, 10: -0.2, 11: -0.5}
+_MAJOR = (0, 2, 4, 5, 7, 9, 11)
+_TARGET_DENSITY = (2.0, 24.0)
 
-# Unison/3rds/4th/5th/6ths considered consonant
-_CONS = {0, 3, 4, 5, 7, 8, 9}
 
-def _consonance(a: int, b: int) -> float:
-    iv = abs(a - b) % 12
-    return 1.0 if iv in _CONS else -0.5
+def _pitches(tokens: Sequence[int]) -> List[int]:
+    return [token_to_pitch(t) for t in tokens if is_pitch(t)]
 
-def reward_harmony(tokens: List[int]) -> float:
-    """Consecutive-note consonance."""
-    pitches = [token_to_pitch(t) for t in tokens if token_is_pitch(t)]
-    if len(pitches) < 2:
+
+def _durations(tokens: Sequence[int]) -> List[int]:
+    return [token_to_duration(t) for t in tokens if is_duration(t)]
+
+
+def _norm_entropy(values: Sequence) -> float:
+    if len(values) < 2:
         return 0.0
-    score = 0.0
-    for a, b in zip(pitches, pitches[1:]):
-        score += _consonance(a, b)
-    return score / (len(pitches) - 1)
-
-def reward_rhythm(tokens: List[int]) -> float:
-    """Prefer simple rhythmic ratios (durations close to integers when adjacent)."""
-    durs = [token_to_dur(t) for t in tokens if t >= 256]
-    if len(durs) < 2:
+    counts = np.array(list(Counter(values).values()), dtype=float)
+    if len(counts) < 2:
         return 0.0
-    ratios = [durs[i+1] / durs[i] if durs[i] != 0 else 1.0 for i in range(len(durs)-1)]
-    penalties = [abs(round(r) - r) for r in ratios]
-    return 1.0 - float(np.mean(np.clip(penalties, 0.0, 1.0)))
+    p = counts / counts.sum()
+    return float(-(p * np.log(p)).sum() / np.log(len(counts)))
 
-# ---------------------------
-# Audio-based rewards (HuggingFace)
-# ---------------------------
 
-_HF_AUDIO_PIPE = None
-_HF_CLAP_PIPE = None
-
-def _get_audio_classifier(model_id: str):
-    global _HF_AUDIO_PIPE
-    if _HF_AUDIO_PIPE is None:
-        try:
-            from transformers import pipeline
-            _HF_AUDIO_PIPE = pipeline("audio-classification", model=model_id, top_k=5)
-        except Exception:
-            _HF_AUDIO_PIPE = False
-    return _HF_AUDIO_PIPE
-
-def _get_clap():
-    global _HF_CLAP_PIPE
-    if _HF_CLAP_PIPE is None:
-        try:
-            from transformers import pipeline
-            _HF_CLAP_PIPE = pipeline("zero-shot-audio-classification", model="laion/clap-htsat-unfused")
-        except Exception:
-            _HF_CLAP_PIPE = False
-    return _HF_CLAP_PIPE
-
-def reward_style(audio_np, sr: int, style_prompt: str, hf_model_id: str) -> float:
-    """
-    Uses an audio classifier to check whether the generated audio matches the style prompt.
-    Heuristic: checks token overlap between classifier labels and prompt words.
-    """
-    pipe = _get_audio_classifier(hf_model_id)
-    if not pipe:
+def reward_harmony(tokens: Sequence[int]) -> float:
+    p = _pitches(tokens)
+    if len(p) < 2:
         return 0.0
-    try:
-        res = pipe({"array": audio_np, "sampling_rate": sr})
-    except Exception:
-        return 0.0
-    prompt_tokens = set(style_prompt.lower().split())
-    hit = 0.0
-    for r in res:
-        if any(w in r["label"].lower() for w in prompt_tokens):
-            hit = max(hit, float(r["score"]))
-    return float(hit)
+    return float(np.mean([_CONSONANCE[abs(a - b) % 12] for a, b in zip(p, p[1:])]))
 
-def reward_clap(audio_np, sr: int, text_prompt: str) -> float:
-    """CLAP text–audio similarity (zero-shot)."""
-    pipe = _get_clap()
-    if not pipe:
+
+def reward_scale(tokens: Sequence[int]) -> float:
+    """Best-fitting major scale coverage -- rewards staying in a key."""
+    p = _pitches(tokens)
+    if len(p) < 4:
         return 0.0
-    try:
-        res = pipe({"array": audio_np, "sampling_rate": sr}, candidate_labels=[text_prompt])
-        return float(res[0]["score"]) if res else 0.0
-    except Exception:
+    hist = np.bincount([x % 12 for x in p], minlength=12)
+    fits = [hist[[(d + s) % 12 for s in _MAJOR]].sum() for d in range(12)]
+    return float(max(fits) / len(p))
+
+
+def reward_rhythm(tokens: Sequence[int]) -> float:
+    """Simple metric ratios between adjacent durations, scaled by duration variety."""
+    d = _durations(tokens)
+    if len(d) < 2:
         return 0.0
+    ok = [1.0 if min(a, b) and max(a, b) % min(a, b) == 0 else 0.0 for a, b in zip(d, d[1:])]
+    return float(np.mean(ok)) * _norm_entropy(d)
+
+
+def reward_diversity(tokens: Sequence[int], n: int = 4) -> float:
+    """Distinct n-gram ratio over pitches -- collapses to 0 on looped output."""
+    p = _pitches(tokens)
+    if len(p) < n + 1:
+        return 0.0
+    grams = [tuple(p[i:i + n]) for i in range(len(p) - n + 1)]
+    return len(set(grams)) / len(grams)
+
+
+def reward_density(tokens: Sequence[int]) -> float:
+    n = len(_pitches(tokens))
+    if n == 0:
+        return 0.0
+    bars = max(1, sum(1 for t in tokens if t == BAR))
+    per_bar = n / bars
+    lo, hi = _TARGET_DENSITY
+    if lo <= per_bar <= hi:
+        return 1.0
+    return float(np.exp(-abs(per_bar - (lo if per_bar < lo else hi)) / hi))
+
+
+def reward_parts(tokens: Sequence[int]) -> Dict[str, float]:
+    return {
+        "harmony": reward_harmony(tokens),
+        "scale": reward_scale(tokens),
+        "rhythm": reward_rhythm(tokens),
+        "diversity": reward_diversity(tokens),
+        "density": reward_density(tokens),
+    }
+
 
 def combine_rewards(parts: Dict[str, float], weights: Dict[str, float]) -> float:
-    return float(sum(weights.get(k, 0.0) * parts.get(k, 0.0) for k in set(parts) | set(weights)))
+    return float(sum(w * parts.get(k, 0.0) for k, w in weights.items()))
+
+
+def total_reward(tokens: Sequence[int], weights: Dict[str, float]) -> float:
+    return combine_rewards(reward_parts(tokens), weights)
