@@ -1,107 +1,96 @@
-import os, yaml, tqdm
+import math
+import os
+
 import torch
 import torch.nn as nn
+import tqdm
+import yaml
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
-from torch.cuda.amp import GradScaler, autocast
+
 from harmonyrl.datasets import make_loaders
-from harmonyrl.midi_utils import vocab_size
-from harmonyrl.models.lstm import LSTMModel
-from harmonyrl.utils.logging import get_logger
+from harmonyrl.midi_utils import PAD
+from harmonyrl.utils import build_model, device_of, get_logger, save_checkpoint
 
-class LabelSmoothingLoss(nn.Module):
-    def __init__(self, smoothing=0.1, ignore_index=0):
-        super().__init__()
-        self.smoothing = smoothing
-        self.ignore_index = ignore_index
-    def forward(self, pred, target):
-        pred = pred.log_softmax(dim=-1)
-        n_class = pred.size(-1)
 
-        mask = target != self.ignore_index
-        target = target[mask]
-        pred = pred[mask]
+def _lr_lambda(step: int, warmup: int, total: int):
+    if step < warmup:
+        return (step + 1) / warmup
+    progress = (step - warmup) / max(1, total - warmup)
+    return 0.5 * (1 + math.cos(math.pi * min(1.0, progress)))
 
-        true_dist = torch.zeros_like(pred)
-        true_dist.fill_(self.smoothing / (n_class - 1))
-        true_dist.scatter_(1, target.unsqueeze(1), 1.0 - self.smoothing)
-
-        return torch.mean(torch.sum(-true_dist * pred, dim=-1))
 
 def train_supervised(config_path: str = "configs/supervised_config.yaml"):
     log = get_logger("supervised")
     cfg = yaml.safe_load(open(config_path, "r"))
+    tcfg = cfg["train"]
     torch.manual_seed(cfg["seed"])
+
     train_loader, val_loader = make_loaders(
         root=cfg["data"]["root"],
         max_seq_len=cfg["data"]["max_seq_len"],
-        batch_size=cfg["train"]["batch_size"],
+        batch_size=tcfg["batch_size"],
         train_ratio=cfg["data"]["train_ratio"],
+        num_workers=cfg["data"].get("num_workers", 0),
     )
+    log.info(f"train chunks={len(train_loader.dataset)} val chunks={len(val_loader.dataset)}")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = LSTMModel(
-        vocab_size=vocab_size(),
-        embed_dim=cfg["model"]["embed_dim"],
-        hidden=cfg["model"]["hidden"],
-        layers=cfg["model"]["layers"],
-        dropout=cfg["model"]["dropout"],
-    ).to(device)
+    device = device_of(tcfg.get("device"))
+    model, arch, _ = build_model(cfg["model"])
+    model = model.to(device)
+    log.info(f"{arch}: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M params on {device}")
 
-    opt = AdamW(model.parameters(), lr=float(cfg["train"]["lr"]), weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, mode="min", factor=0.5, patience=3)
+    opt = AdamW(model.parameters(), lr=float(tcfg["lr"]), weight_decay=float(tcfg.get("weight_decay", 0.01)))
+    total_steps = len(train_loader) * tcfg["epochs"]
+    warmup = min(tcfg.get("warmup_steps", 500), max(1, total_steps // 10))
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: _lr_lambda(s, warmup, total_steps))
+    loss_fn = nn.CrossEntropyLoss(ignore_index=PAD, label_smoothing=tcfg.get("label_smoothing", 0.0))
+    # model selection / early stopping must compare true NLL, not the smoothed
+    # training objective (smoothing adds a constant floor to the reported loss).
+    eval_loss_fn = nn.CrossEntropyLoss(ignore_index=PAD)
+    scaler = GradScaler(device, enabled=(device == "cuda"))
 
-    if cfg["train"].get("label_smoothing", 0.0) > 0:
-        loss_fn = LabelSmoothingLoss(
-            smoothing=cfg["train"]["label_smoothing"], ignore_index=0
-        )
-    else:
-        loss_fn = nn.CrossEntropyLoss(ignore_index=0)
-    scaler = GradScaler(enabled=(device == "cuda"))
-
-    def run_epoch(loader, is_train=True):
-        model.train(is_train)
+    def run_epoch(loader, train: bool):
+        model.train(train)
         total, count = 0.0, 0
-        with torch.set_grad_enabled(is_train):
-            for X, Y, _ in tqdm.tqdm(loader):
-                X, Y = X.to(device), Y.to(device)
-                with autocast(enabled=(device == "cuda")):
-                    logits, _ = model(X)
-                    loss = loss_fn(
-                        logits.reshape(-1, logits.size(-1)), Y.reshape(-1))
-                if is_train:
-                    opt.zero_grad()
-                    scaler.scale(loss).backward()
-                    torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), cfg["train"]["clip_grad_norm"])
-                    scaler.step(opt)
-                    scaler.update()
-                total += loss.item() * X.size(0)
-                count += X.size(0)
+        for X, Y in tqdm.tqdm(loader, leave=False):
+            X, Y = X.to(device), Y.to(device)
+            n = int((Y != PAD).sum())
+            if n == 0:  # an all-padding batch makes cross_entropy return NaN
+                continue
+            with torch.set_grad_enabled(train), autocast(device, enabled=(device == "cuda")):
+                logits = model(X)[0]
+                fn = loss_fn if train else eval_loss_fn
+                loss = fn(logits.reshape(-1, logits.size(-1)), Y.reshape(-1))
+            if train:
+                opt.zero_grad(set_to_none=True)
+                scaler.scale(loss).backward()
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), tcfg["clip_grad_norm"])
+                scaler.step(opt)
+                scaler.update()
+                sched.step()
+            total += loss.item() * n
+            count += n
         return total / max(1, count)
 
-    best = float("inf")
-    patience, bad_epochs = cfg["train"].get("patience", 5), 0
+    os.makedirs(tcfg["ckpt_dir"], exist_ok=True)
+    ckpt_path = os.path.join(tcfg["ckpt_dir"], f"{arch}_supervised.pt")
+    best, bad = float("inf"), 0
 
-    for epoch in range(cfg["train"]["epochs"]):
-        tr_loss = run_epoch(train_loader, True)
-        va_loss = run_epoch(val_loader, False)
+    for epoch in range(tcfg["epochs"]):
+        tr = run_epoch(train_loader, True)
+        va = run_epoch(val_loader, False)
+        log.info(f"epoch {epoch + 1}/{tcfg['epochs']} | train {tr:.4f} "
+                 f"| val {va:.4f} | val ppl {math.exp(min(20, va)):.2f}")
 
-        scheduler.step(va_loss)
-
-        log.info(f"epoch {epoch+1}/{cfg['train']['epochs']} "
-                 f"| train={tr_loss:.4f} | val={va_loss:.4f}")
-
-        if va_loss < best:
-            os.makedirs(cfg["train"]["ckpt_dir"], exist_ok=True)
-            ckpt_path = os.path.join(cfg["train"]["ckpt_dir"], "lstm_supervised.pt")
-            torch.save(model.state_dict(), ckpt_path)
-            best = va_loss
-            bad_epochs = 0
-            log.info(f"✅ checkpoint saved: {ckpt_path}")
+        if va < best:
+            best, bad = va, 0
+            save_checkpoint(ckpt_path, model, cfg["model"], {"val_loss": va, "epoch": epoch})
+            log.info(f"saved {ckpt_path}")
         else:
-            bad_epochs += 1
-
-        if bad_epochs >= patience:
-            log.info("⏹ Early stopping triggered.")
-            break
+            bad += 1
+            if bad >= tcfg.get("patience", 5):
+                log.info("early stopping")
+                break
+    return ckpt_path
