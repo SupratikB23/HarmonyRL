@@ -1,2 +1,2 @@
 from .lstm import LSTMModel
-from .transformer import SmallTransformer
+from .transformer import MusicTransformer

@@ -39,3 +39,6 @@ Thumbs.db
 
 # Dataset
 data/
+# Tokenizer cache
+.cache/
+.pytest_cache/

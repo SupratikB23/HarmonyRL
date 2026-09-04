@@ -1,16 +1,24 @@
 seed: 42
 data:
   root: "data/maestro"
-  max_seq_len: 1024     
+  max_seq_len: 1024
   train_ratio: 0.95
+  num_workers: 4
 model:
-  embed_dim: 512
-  hidden: 512        
-  layers: 3
-  dropout: 0.3     
+  arch: transformer
+  d_model: 512
+  nhead: 8
+  num_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+  max_len: 2048
 train:
-  batch_size: 16         
-  lr: 5e-4      
-  epochs: 50           
+  batch_size: 16
+  lr: 3e-4
+  weight_decay: 0.01
+  warmup_steps: 500
+  epochs: 30
+  label_smoothing: 0.05
   clip_grad_norm: 1.0
+  patience: 5
   ckpt_dir: "checkpoints"
