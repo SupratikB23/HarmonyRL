@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 audio = ["transformers>=4.41", "diffusers>=0.30", "accelerate>=0.33"]
+mp3 = ["lameenc"]
 dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]

@@ -195,6 +195,19 @@ python scripts/infer.py --n_samples 4 --output_dir outputs/
 
 Writes MIDI (and WAV, unless `--no_audio`) and logs the evaluation metrics per sample.
 
+### Step 4 — MP3 (optional)
+
+```bash
+pip install lameenc
+python scripts/to_mp3.py                        # outputs/*.mid -> outputs/mp3/*.mp3
+python scripts/to_mp3.py --soundfont piano.sf2  # better tone, needs FluidSynth
+```
+
+Standalone: it reads a folder of MIDI and writes MP3s, independent of the rest of the
+pipeline. `lameenc` ships the LAME encoder as a wheel, so no ffmpeg install is needed.
+Without a soundfont it uses a built-in damped-harmonic synth — listenable, clearly
+synthetic. Useful flags: `--bitrate`, `--sr`, `--output_dir`, `--overwrite`.
+
 Training needs a GPU. See [`notebooks/`](notebooks/) for ready-to-run molab and
 Kaggle notebooks that fetch MAESTRO, train both stages, and generate samples.
 
@@ -238,7 +251,7 @@ HarmonyRL/
 │   ├── harmonyrl_molab.py       # marimo notebook (molab)
 │   ├── harmonyrl_kaggle.ipynb
 │   └── configs/                 # GPU-sized training presets
-├── scripts/                     # train_supervised / train_rl / infer
+├── scripts/                     # train_supervised / train_rl / infer / to_mp3
 ├── tests/
 └── pyproject.toml
 ```
