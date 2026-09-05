@@ -1,73 +1,69 @@
 # Contributing to HarmonyRL
 
-Thanks for your interest in improving HarmonyRL! This project is an active research experiment, so small, focused contributions are preferred.
+HarmonyRL is an active research experiment, so small, focused contributions are preferred.
 
-## Getting Started
+## Setup
 
-1. **Fork & clone**
-   ```bash
-   git clone https://github.com/<your-username>/HarmonyRL.git
-   cd HarmonyRL
-   ```
-2. **Create a virtual environment**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate      # Linux/macOS
-   # venv\Scripts\activate       # Windows
-   ```
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. **(Optional) Install in editable mode**
-   ```bash
-   pip install -e .
-   ```
-5. **Dataset**
-   Download the MAESTRO dataset and place it under `data/maestro/` as described in the README.
+```bash
+git clone https://github.com/<your-username>/HarmonyRL.git
+cd HarmonyRL
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+pip install -e .                  # optional; scripts run without it
+```
 
-## Running the Project
+Download [MAESTRO](https://magenta.tensorflow.org/datasets/maestro) into `data/maestro/`.
+Training needs a GPU; see [`notebooks/`](notebooks/) for molab and Kaggle notebooks.
 
-- **Supervised pretraining**
-  ```bash
-  python scripts/train_supervised.py --config configs/supervised_config.yaml
-  ```
-- **RL fine-tuning**
-  ```bash
-  python scripts/train_rl.py --config configs/rl_config.yaml
-  ```
-- **Inference**
-  ```bash
-  python scripts/infer.py --ckpt checkpoints/best_model.pt --output_dir outputs/
-  ```
+## Running things
 
-## Development Guidelines
+```bash
+python scripts/train_supervised.py --config configs/supervised_config.yaml
+python scripts/train_rl.py         --config configs/rl_config.yaml
+python scripts/infer.py --n_samples 4 --output_dir outputs/
+python scripts/to_mp3.py                     # needs: pip install lameenc
+```
 
-- Keep changes focused and aligned with the experimental goals described in the README.
-- Follow existing code style and naming conventions in the touched files.
-- Update documentation and config examples when behavior or defaults change.
-- If you add new dependencies, explain why they are needed and keep them minimal.
+## Tests
 
-## Tests & Validation
+```bash
+pytest
+```
 
-There is currently no automated test suite. If you introduce tests, document how to run them in your PR description and ensure they pass.
+46 tests must pass before a pull request. They exist because most of them were written in
+response to a real bug, so treat a failure as a genuine regression rather than a flaky
+check. If you change behaviour, add a test that would have caught the old behaviour.
 
-## Submitting Changes
+Two areas deserve extra care:
 
-1. Create a feature branch from `main`.
-2. Make your changes with clear, descriptive commit messages.
-3. Open a pull request explaining **what** changed and **why**, and include:
-   - Relevant training/inference commands you ran
-   - Config changes and expected behavior updates
+- **Tokenizer.** `midi_to_tokens` and `tokens_to_midi` must round-trip note count,
+  polyphony, timing and velocity. A silent asymmetry here corrupts every downstream stage.
+- **Reward functions.** Any new term must not be maximizable by degenerate output.
+  `tests/test_rewards.py` asserts that a single repeated note scores worse than varied,
+  in-key material.
 
-## Reporting Issues
+## Guidelines
 
-When filing a bug report, please include:
-- Your OS and Python version
-- The command you ran and its configuration
-- Minimal reproduction steps
-- Logs or error tracebacks
+- Keep changes focused, and match the style of the file you are touching.
+- Update configs, docs and the README when defaults or behaviour change.
+- Justify new dependencies. The runtime set is deliberately small, and packages that can
+  drag in a CPU build of torch on a GPU host are a particular problem.
+- Report measured numbers, not estimates. If you claim something is faster or better, say
+  what you ran.
+
+## Pull requests
+
+Branch from `main`, then open a PR describing what changed and why. Include the commands
+you ran, any config changes, and the test result. For anything affecting training quality,
+include validation perplexity or the relevant evaluation metrics from
+`harmonyrl/utils/evaluation.py`.
+
+## Bug reports
+
+Include your OS and Python version, the exact command and config, minimal reproduction
+steps, and the full traceback.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the Apache 2.0 License.
+Contributions are licensed under Apache 2.0.

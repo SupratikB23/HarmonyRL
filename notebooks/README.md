@@ -1,93 +1,87 @@
 # Training notebooks
 
 Training HarmonyRL needs a GPU. These notebooks fetch the code and MAESTRO, run both
-training stages, and generate samples — nothing to upload.
+stages, and generate samples. Nothing to upload but the notebook itself.
 
 | | [molab](https://molab.marimo.io) | [Kaggle](https://kaggle.com/code) |
 |---|---|---|
-| GPU | RTX Pro 6000 Blackwell, 96 GB VRAM | T4 (16 GB) or P100 |
-| Session cap | 12 h | 12 h, ~30 GPU-h/week |
+| GPU | RTX Pro 6000 Blackwell, 96 GB | T4 (16 GB) or P100 |
+| Session cap | 12 h | 12 h, about 30 GPU-h per week |
 | Notebook | `harmonyrl_molab.py` | `harmonyrl_kaggle.ipynb` |
-| Format | marimo (`.py`) | Jupyter (`.ipynb`) |
-| Cost | free | free |
+| Format | marimo (.py) | Jupyter (.ipynb) |
 
-**Use molab.** The Blackwell card is far ahead of a T4, and you can raise `batch_size`
-well past the preset without running out of memory.
+Prefer molab. The Blackwell card is far ahead of a T4, and you can raise `batch_size` well
+past the preset without running out of memory.
 
----
+## What gets fetched at runtime
 
-## What you feed the platform
-
-Just the notebook. Everything else is fetched at runtime:
-
-- **Code** — cloned from your GitHub repo. Push your work first, then set `BRANCH` in the
-  notebook's cell 1 to whatever branch you pushed.
-- **Data** — MAESTRO v3.0.0 MIDI (58 MB, 1276 files) downloaded straight from Magenta.
-  You do **not** need to upload your local `data/maestro/`.
-- **Configs** — `configs/supervised_gpu.yaml` and `configs/rl_gpu.yaml` in this folder,
-  which ride along with the repo clone.
-
----
+- Code, cloned from GitHub. Push your work first, then set `BRANCH` in the clone cell.
+- MAESTRO v3.0.0 MIDI, 58 MB, 1276 files, pulled straight from Magenta. Your local
+  `data/maestro/` is not needed.
+- Configs, from `configs/` in this folder, which ride along with the clone.
 
 ## molab
 
-1. Go to [molab.marimo.io](https://molab.marimo.io) and create a notebook.
-2. Upload `harmonyrl_molab.py` through the sidebar file manager, or open it from GitHub.
-3. **Click the notebook specs button in the header and attach the GPU.** The notebook
-   raises an error if you skip this — a CPU run would take weeks.
-4. Run the cells top to bottom.
+1. Create a notebook at [molab.marimo.io](https://molab.marimo.io) and upload
+   `harmonyrl_molab.py`.
+2. Click the notebook specs button in the header and attach the GPU. The notebook stops
+   with an error if you skip this.
+3. Run the cells from the top. They stop and wait at a Start button before anything long
+   runs.
 
-molab only persists files you uploaded through the sidebar or cached with
-`mo.persistent_cache`. **Download `checkpoints/*.pt` before the session ends**, or use the
-optional Hugging Face upload cell at the bottom.
+marimo schedules cells by data dependency, not page order, so each stage consumes the
+previous stage's result and the sequence is enforced for you. The two multi-hour stages
+sit behind run buttons, so they never start on load and never re-run themselves.
+
+molab only persists files uploaded through the sidebar or cached with
+`mo.persistent_cache`. Download `checkpoints/*.pt` before the session ends, or use the
+Hugging Face upload cell at the bottom.
 
 ## Kaggle
 
-1. New Notebook → **File → Import Notebook** → upload `harmonyrl_kaggle.ipynb`.
-2. In the right-hand panel set **Accelerator → GPU T4 x2** and **Internet → On**.
-   Both are required; the notebook checks the first and fails fast without it.
+1. File, Import Notebook, upload `harmonyrl_kaggle.ipynb`.
+2. In the right-hand panel set Accelerator to GPU T4 x2 and Internet to On. Both are
+   required.
 3. Run all.
 
-`/kaggle/working` is wiped when the session ends. Save checkpoints from the **Output** tab,
-or write them out as a Kaggle Dataset so a later session can mount them as an input.
-
----
+`/kaggle/working` is wiped when the session ends. Save checkpoints from the Output tab, or
+write them out as a Kaggle Dataset so a later session can mount them as an input.
 
 ## The GPU presets
 
-`configs/supervised_gpu.yaml` is a ~25M-param Transformer (`d_model` 512, 8 layers) over
-sequences of 1024 tokens at batch 32.
+`configs/supervised_gpu.yaml` is a 25.3M-parameter Transformer, `d_model` 512 over 8
+layers, sequences of 1024 tokens at batch 32.
 
-Measured on the full 1276-file corpus:
+Measured on the full corpus:
 
 | | |
 |---|---|
 | Tokens cached | 28.5M |
 | Train / val chunks | 53,594 / 2,441 |
-| Steps per epoch @ batch 32 | 1,674 |
-| One-time tokenizing pass | ~9 min |
+| Steps per epoch at batch 32 | 1,674 |
+| One-time tokenizing pass | about 9 min |
+| Checkpoint size | 101 MB |
 
-30 epochs is ~50k steps. Wall-clock depends on the card — expect a couple of hours on
-molab's Blackwell, appreciably longer on a T4. Early stopping usually trips first.
+30 epochs is roughly 50k steps; early stopping usually trips first. A reference run stopped
+at epoch 12 with validation perplexity 3.16.
 
-**On a 16 GB card**, if you hit OOM: drop `batch_size` to 8 and `max_seq_len` to 512.
-**On molab**, you can raise `batch_size` to 64+ and leave everything else alone.
+On a 16 GB card, if you hit OOM, drop `batch_size` to 8 and `max_seq_len` to 512. On molab
+you can raise `batch_size` to 64 or beyond and leave everything else alone.
 
----
+## Reading the output
 
-## Reading the training output
+**Stage 1, supervised.** Watch `val ppl`. It should fall steadily and land well under 10.
+A random model sits near 172, the vocabulary size. After the tokenizing bar finishes, the
+only output is one line per epoch, so a quiet cell is normal rather than a hang.
 
-**Stage 1 — supervised.** Watch `val ppl`. It should fall well under 10. A random model
-sits near 172 (the vocabulary size), so anything close to that means it is not learning.
+**Stage 2, PPO.** Watch `R` and `diversity` together.
 
-**Stage 2 — PPO.** Watch `R` and `diversity` *together*:
-
-| What you see | What it means |
+| Reading | Meaning |
 |---|---|
-| `R` up, `diversity` ~1.0 | working |
-| `R` up, `diversity` falling | **reward hacking** — stop, raise `kl_coef` or the `diversity` weight |
+| `R` up, `diversity` near 1.0 | working |
+| `R` up, `diversity` falling | reward hacking; stop and raise `kl_coef` or the `diversity` weight |
 | `kl` drifting up slowly | normal |
-| `kl` jumping | the policy is running away from the reference; lower `lr` |
+| `kl` jumping | policy running from the reference; lower `lr` |
 
-**Stage 3 — samples.** `max_repeat_run` in low single digits is healthy. A large value
-means the model is stuck on one note no matter what the reward reports.
+**Stage 3, samples.** `max_repeat_run` in low single digits is healthy. A large value means
+the model is stuck on one note regardless of what the reward reports.
