@@ -205,8 +205,20 @@ python scripts/to_mp3.py --soundfont piano.sf2  # better tone, needs FluidSynth
 
 Standalone: it reads a folder of MIDI and writes MP3s, independent of the rest of the
 pipeline. `lameenc` ships the LAME encoder as a wheel, so no ffmpeg install is needed.
-Without a soundfont it uses a built-in damped-harmonic synth — listenable, clearly
-synthetic. Useful flags: `--bitrate`, `--sr`, `--output_dir`, `--overwrite`.
+
+Without a soundfont it renders with a built-in additive piano: inharmonic partials with
+per-partial decay, velocity-dependent brightness, 5 ms attack and a damper on note-off,
+stereo spread by pitch, a small convolution room, and percentile normalization with a
+soft limiter so one dense chord cannot crush the piece.
+
+| Flag | Default | |
+|---|---|---|
+| `--brightness` | `1400` | tone rolloff in Hz; raise for a brighter piano |
+| `--max_note` | off | cap note length in seconds; thins long-note pileups |
+| `--reverb` | `0.22` | `0` disables |
+| `--soundfont` | off | `.sf2` path; needs FluidSynth, and beats the built-in synth |
+
+Also `--bitrate`, `--sr`, `--input_dir`, `--output_dir`, `--overwrite`.
 
 Training needs a GPU. See [`notebooks/`](notebooks/) for ready-to-run molab and
 Kaggle notebooks that fetch MAESTRO, train both stages, and generate samples.
