@@ -39,6 +39,8 @@ Thumbs.db
 
 # Dataset
 data/
+# Personal study notes (never commit)
+UNDERSTANDING.md
 # Tokenizer cache
 .cache/
 .pytest_cache/
