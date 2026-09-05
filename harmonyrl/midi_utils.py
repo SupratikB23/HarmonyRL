@@ -51,7 +51,8 @@ def token_to_pitch(tok: int) -> int:
 
 
 def token_to_velocity(tok: int) -> int:
-    return min(127, (tok - VEL_BASE) * (128 // N_VELOCITY) + 4)
+    # bin b covers [4b, 4b+3]; return its midpoint so re-encoding lands in the same bin
+    return min(127, (tok - VEL_BASE) * (128 // N_VELOCITY) + (128 // N_VELOCITY) // 2)
 
 
 def token_to_duration(tok: int) -> int:

@@ -53,7 +53,7 @@ def train_supervised(config_path: str = "configs/supervised_config.yaml"):
     def run_epoch(loader, train: bool):
         model.train(train)
         total, count = 0.0, 0
-        for X, Y in tqdm.tqdm(loader, leave=False):
+        for X, Y in tqdm.tqdm(loader, leave=False, disable=None):
             X, Y = X.to(device), Y.to(device)
             n = int((Y != PAD).sum())
             if n == 0:  # an all-padding batch makes cross_entropy return NaN

@@ -100,3 +100,21 @@ def test_cached_multi_token_prefill_matches_full_forward():
 def test_padding_row_stays_zero_after_init(cfg):
     model, _, _ = build_model(cfg)
     assert torch.count_nonzero(model.embed.weight[PAD]) == 0
+
+
+@pytest.mark.parametrize("cfg", CONFIGS)
+def test_init_starts_near_uniform(cfg):
+    """An untrained model should sit near ln(vocab). A tied embedding left at
+    nn.Embedding's default N(0, 1) saturates the softmax and starts far worse."""
+    import math
+
+    import torch.nn as nn
+
+    torch.manual_seed(0)
+    model, _, _ = build_model(cfg)
+    model.eval()
+    x = torch.randint(4, 170, (4, 64))
+    y = torch.randint(4, 170, (4, 64))
+    logits = model(x)[0]
+    loss = nn.CrossEntropyLoss()(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+    assert loss.item() < math.log(vocab_size()) * 1.5, f"init loss {loss.item():.2f}"

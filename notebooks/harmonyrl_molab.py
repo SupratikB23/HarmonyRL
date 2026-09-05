@@ -174,8 +174,9 @@ def _(mo):
         ~25M params over 28.5M tokens: 53,594 chunks, 1,674 steps per epoch at batch 32.
         30 epochs is ~50k steps. Early stopping usually trips first.
 
-        The first run tokenizes all 1276 files into `.cache/` — that pass alone takes
-        about 9 minutes and prints nothing while it works. Later runs reuse the cache.
+        The first run tokenizes all 1276 files into `.cache/` — about 9 minutes, with a
+        progress bar. Later runs reuse the cache. After that the only output is one
+        line per epoch, so a quiet cell is normal, not a hang.
 
         Watch **`val ppl`** — it should fall steadily and land well under 10. A random
         model sits near 172 (the vocabulary size).

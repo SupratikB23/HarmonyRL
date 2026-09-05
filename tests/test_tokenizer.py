@@ -58,3 +58,23 @@ def test_roundtrip_start_time_is_preserved():
     pm = make_midi()
     out = mu.tokens_to_midi(mu.midi_to_tokens(pm, 4096)).instruments[0].notes
     assert min(n.start for n in out) == 0.0
+
+
+def test_velocity_survives_reencoding():
+    """Decoding must land inside the bin it came from, or velocity drifts upward
+    one bin on every encode -> decode -> encode cycle."""
+    for tok in range(mu.VEL_BASE, mu.DUR_BASE):
+        vel = mu.token_to_velocity(tok)
+        rebinned = mu.VEL_BASE + min(mu.N_VELOCITY - 1, vel * mu.N_VELOCITY // 128)
+        assert rebinned == tok, f"{tok} -> vel {vel} -> {rebinned}"
+
+
+def test_velocity_is_close_to_source():
+    pm = pretty_midi.PrettyMIDI(initial_tempo=120.0)
+    inst = pretty_midi.Instrument(program=0)
+    for i, v in enumerate((1, 30, 64, 80, 100, 127)):
+        inst.notes.append(pretty_midi.Note(velocity=v, pitch=60, start=i * 0.5, end=i * 0.5 + 0.4))
+    pm.instruments.append(inst)
+    out = mu.tokens_to_midi(mu.midi_to_tokens(pm, 4096)).instruments[0].notes
+    for src, got in zip((1, 30, 64, 80, 100, 127), [n.velocity for n in out]):
+        assert abs(src - got) <= 2, f"{src} decoded as {got}"

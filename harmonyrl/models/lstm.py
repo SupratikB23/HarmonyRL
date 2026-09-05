@@ -18,6 +18,9 @@ class LSTMModel(nn.Module):
         self.proj = nn.Linear(hidden, embed_dim, bias=False) if hidden != embed_dim else nn.Identity()
         self.head = nn.Linear(embed_dim, vocab_size, bias=False)
         self.head.weight = self.embed.weight
+        nn.init.normal_(self.embed.weight, std=0.02)
+        with torch.no_grad():
+            self.embed.weight[PAD].zero_()
 
     def features(self, x, state=None):
         out, state = self.lstm(self.embed(x), state)

@@ -94,7 +94,7 @@ def train_rl(config_path: str = "configs/rl_config.yaml"):
     clip, kl_coef = rc.get("clip_range", 0.2), rc.get("kl_coef", 0.05)
     reward_log = []
 
-    for it in tqdm.tqdm(range(rc["iterations"])):
+    for it in tqdm.tqdm(range(rc["iterations"]), disable=None):
         seq = backbone.sample(batch_size=rc["batch_size"], max_new_tokens=rc["rollout_len"],
                               temperature=rc.get("temperature", 1.0),
                               top_p=rc.get("top_p", 0.95), device=device)
